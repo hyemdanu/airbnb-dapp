@@ -1,0 +1,19 @@
+/* Global CSS variables and light layout helpers.
+   You can customize base colors here or override PrimeReact --p-* tokens.
+*/
+:root { --gap: 16px; --text: #222; --muted:#666; --bg:#fff; --line:#eee; }
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin:0; color: var(--text); background: var(--bg); }
+.wrap { max-width: 1200px; margin: 0 auto; padding: 0 16px; }
+.sticky { position: sticky; }
+.top-0 { top: 0; }
+.z-5 { z-index: 5; }
+.relative { position: relative; }
+.h-full { height: 100%; }
+.mt-3 { margin-top: 1rem; }
+
+/* Optional local tweaks beyond PrimeFlex */
+.border-1 { border: 1px solid var(--line); }
+.border-200 { border-color: var(--line); }
+.border-round { border-radius: 12px; }
