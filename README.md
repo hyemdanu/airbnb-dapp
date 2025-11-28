@@ -39,10 +39,6 @@ Open http://localhost:5173
 - `Listings.sol` - property listings
 - `BookingEscrow.sol` - bookings and payments
 - `Reviews.sol` - verified reviews
-
-## Demo Mode
-
-App runs demo wallet
 ---
 
 CSC196D Fall 2025
