@@ -1,14 +1,17 @@
-import React, { createContext, useState, useEffect, useContext } from 'react';
+import React, { createContext, useState, useEffect, useContext, useCallback } from 'react';
 import Web3 from 'web3';
-import { MockWeb3, mockEthereum, DEMO_ACCOUNTS } from '../utils/mockWeb3';
+import {
+  getGanacheAccounts,
+  getCurrentAccount,
+  switchAccount as switchDemoAccount,
+  checkGanacheConnection,
+  createContract,
+  setTransactionLogger
+} from '../utils/demoWallet';
+import { useTransactionLog } from './TransactionLogContext';
 
-// we'll load contract ABIs dynamically instead of importing them
-// this way it won't break if contracts aren't deployed yet
-
-// Create the context
 const Web3Context = createContext();
 
-// Custom hook to use the Web3 context
 export const useWeb3 = () => {
   const context = useContext(Web3Context);
   if (!context) {
@@ -17,107 +20,106 @@ export const useWeb3 = () => {
   return context;
 };
 
-// Web3 Provider component
+const GANACHE_URL = 'http://127.0.0.1:8545';
+
 export const Web3Provider = ({ children }) => {
   const [web3, setWeb3] = useState(null);
   const [account, setAccount] = useState(null);
+  const [accountInfo, setAccountInfo] = useState(null);
   const [networkId, setNetworkId] = useState(null);
+  const [blockNumber, setBlockNumber] = useState(null);
   const [contracts, setContracts] = useState({
+    listings: null,
+    booking: null,
+    reviews: null
+  });
+  const [contractAddresses, setContractAddresses] = useState({
     listings: null,
     booking: null,
     reviews: null
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [ganacheConnected, setGanacheConnected] = useState(false);
 
-  // Initialize Web3 - uses demo wallet by default (no MetaMask needed!)
+  const transactionLog = useTransactionLog();
+
+  useEffect(() => {
+    if (transactionLog) {
+      setTransactionLogger((txInfo) => {
+        transactionLog.logTransaction(txInfo);
+      });
+    }
+  }, [transactionLog]);
+
   const initWeb3 = async () => {
     try {
-      // FOR DEMO: we're using a fake wallet so you don't need MetaMask
-      // if you want to use real MetaMask later, just uncomment the code below
+      setLoading(true);
+      setError(null);
 
-      const useDemoWallet = true; // set to false to use real MetaMask
+      console.log('Initializing Web3...');
 
-      if (useDemoWallet) {
-        // using our mock Web3 provider - no MetaMask required!
-        console.log('🎭 Running in DEMO MODE - no MetaMask needed');
-        const web3Instance = new MockWeb3();
-        setWeb3(web3Instance);
+      const connectionStatus = await checkGanacheConnection();
 
-        // get the first demo account (Alice)
-        const accounts = await mockEthereum.request({ method: 'eth_requestAccounts' });
-        setAccount(accounts[0]);
-        console.log('👤 Demo account:', DEMO_ACCOUNTS[0].name);
-
-        // fake network ID (Ganache)
-        setNetworkId('5777');
-
-        // load contracts with mock provider
-        await loadContracts(web3Instance, '5777');
-
-        setError(null);
-      } else {
-        // REAL METAMASK CODE (commented out for demo)
-        // Check if MetaMask is installed
-        if (window.ethereum) {
-          const web3Instance = new Web3(window.ethereum);
-          setWeb3(web3Instance);
-
-          // Request account access
-          const accounts = await window.ethereum.request({
-            method: 'eth_requestAccounts'
-          });
-          setAccount(accounts[0]);
-
-          // Get network ID
-          const netId = await web3Instance.eth.net.getId();
-          setNetworkId(netId.toString());
-
-          // Load contracts
-          await loadContracts(web3Instance, netId.toString());
-
-          // Listen for account changes
-          window.ethereum.on('accountsChanged', (accounts) => {
-            setAccount(accounts[0] || null);
-          });
-
-          // Listen for network changes
-          window.ethereum.on('chainChanged', () => {
-            window.location.reload();
-          });
-
-          setError(null);
-        } else {
-          setError('Please install MetaMask to use this DApp');
-        }
+      if (!connectionStatus.connected) {
+        throw new Error('Cannot connect to Ganache. Run: ganache --deterministic --port 8545');
       }
+
+      setGanacheConnected(true);
+      setNetworkId(connectionStatus.networkId.toString());
+      setBlockNumber(connectionStatus.blockNumber);
+
+      const web3Instance = new Web3(GANACHE_URL);
+      setWeb3(web3Instance);
+
+      const currentAcc = getCurrentAccount();
+      if (currentAcc) {
+        setAccount(currentAcc.address);
+        setAccountInfo(currentAcc);
+      }
+
+      await loadContracts(web3Instance);
+
+      console.log('Web3 initialized');
+
     } catch (err) {
-      console.error('Error initializing Web3:', err);
+      console.log('Error initializing Web3: ' + err.message);
       setError(err.message);
+      setGanacheConnected(false);
     } finally {
       setLoading(false);
     }
   };
 
-  // load contracts - simplified for demo mode
-  const loadContracts = async (web3Instance, networkId) => {
+  const loadContracts = async (web3Instance) => {
     try {
-      // in demo mode, we don't need real ABIs - just create mock contract instances
-      // the MockWeb3 class handles all the contract logic internally
-      const listingsContract = new web3Instance.eth.Contract(
-        [], // empty ABI is fine for mock
-        '0x1234567890123456789012345678901234567890' // fake address
-      );
+      let config;
+      try {
+        config = await import('../contracts/config.js');
+      } catch (importErr) {
+        console.log('Contract config not found. Run: truffle migrate --reset && ./copy-contracts.sh');
+        setError('Contracts not deployed. Run: truffle migrate --reset && ./copy-contracts.sh');
+        return;
+      }
 
-      const bookingContract = new web3Instance.eth.Contract(
-        [],
-        '0x2234567890123456789012345678901234567890'
-      );
+      const { CONTRACT_ADDRESSES, ListingsABI, BookingEscrowABI, ReviewsABI } = config;
 
-      const reviewsContract = new web3Instance.eth.Contract(
-        [],
-        '0x3234567890123456789012345678901234567890'
-      );
+      if (!CONTRACT_ADDRESSES.listings || !CONTRACT_ADDRESSES.booking || !CONTRACT_ADDRESSES.reviews) {
+        console.log('Contract addresses not found in config');
+        setError('Contracts not deployed. Run: truffle migrate --reset && ./copy-contracts.sh');
+        return;
+      }
+
+      console.log('Contract addresses:');
+      console.log('  Listings: ' + CONTRACT_ADDRESSES.listings);
+      console.log('  Booking: ' + CONTRACT_ADDRESSES.booking);
+      console.log('  Reviews: ' + CONTRACT_ADDRESSES.reviews);
+
+      setContractAddresses(CONTRACT_ADDRESSES);
+
+      const listingsContract = createContract(web3Instance, ListingsABI, CONTRACT_ADDRESSES.listings);
+      const bookingContract = createContract(web3Instance, BookingEscrowABI, CONTRACT_ADDRESSES.booking);
+      const reviewsContract = createContract(web3Instance, ReviewsABI, CONTRACT_ADDRESSES.reviews);
 
       setContracts({
         listings: listingsContract,
@@ -125,40 +127,54 @@ export const Web3Provider = ({ children }) => {
         reviews: reviewsContract
       });
 
-      console.log('✅ Contracts loaded (demo mode)');
+      console.log('Contracts loaded');
+
+      try {
+        const listingCount = await listingsContract.methods.listingCounter().call();
+        console.log('Listings on chain: ' + listingCount);
+      } catch (err) {
+        console.log('Could not read from Listings contract');
+      }
+
     } catch (err) {
-      console.error('Error loading contracts:', err);
-      // don't throw - just log the error
+      console.log('Error loading contracts: ' + err.message);
+      setError('Failed to load contracts: ' + err.message);
     }
   };
 
-  // Connect wallet manually (if user denied initially)
-  const connectWallet = async () => {
-    await initWeb3();
-  };
+  const switchToAccount = useCallback(async (index) => {
+    const newAccount = switchDemoAccount(index);
+    if (newAccount && web3) {
+      setAccount(newAccount.address);
+      const balance = await web3.eth.getBalance(newAccount.address);
+      const balanceEth = web3.utils.fromWei(balance, 'ether');
+      setAccountInfo({ ...newAccount, balance: parseFloat(balanceEth) });
+      return newAccount;
+    }
+    return null;
+  }, [web3]);
 
-  // Disconnect wallet
-  const disconnectWallet = () => {
-    setAccount(null);
-  };
+  const refreshBalance = useCallback(async () => {
+    if (web3 && account) {
+      const balance = await web3.eth.getBalance(account);
+      const balanceEth = web3.utils.fromWei(balance, 'ether');
+      setAccountInfo(prev => ({ ...prev, balance: parseFloat(balanceEth) }));
+    }
+  }, [web3, account]);
 
-  // Helper: Convert ETH to Wei
-  const toWei = (eth) => {
+  const toWei = useCallback((eth) => {
     return web3 ? web3.utils.toWei(eth.toString(), 'ether') : '0';
-  };
+  }, [web3]);
 
-  // Helper: Convert Wei to ETH
-  const fromWei = (wei) => {
+  const fromWei = useCallback((wei) => {
     return web3 ? web3.utils.fromWei(wei.toString(), 'ether') : '0';
-  };
+  }, [web3]);
 
-  // Helper: Get formatted address (0x1234...5678)
-  const formatAddress = (address) => {
+  const formatAddress = useCallback((address) => {
     if (!address) return '';
-    return `${address.substring(0, 6)}...${address.substring(address.length - 4)}`;
-  };
+    return address.substring(0, 6) + '...' + address.substring(address.length - 4);
+  }, []);
 
-  // Initialize on mount
   useEffect(() => {
     initWeb3();
   }, []);
@@ -166,15 +182,21 @@ export const Web3Provider = ({ children }) => {
   const value = {
     web3,
     account,
+    accountInfo,
     networkId,
+    blockNumber,
     contracts,
+    contractAddresses,
     loading,
     error,
-    connectWallet,
-    disconnectWallet,
+    ganacheConnected,
+    switchToAccount,
+    refreshBalance,
     toWei,
     fromWei,
-    formatAddress
+    formatAddress,
+    getGanacheAccounts,
+    reconnect: initWeb3
   };
 
   return <Web3Context.Provider value={value}>{children}</Web3Context.Provider>;

@@ -1,48 +1,63 @@
-# Airbnb DApp - F.O.B. Imports
+# StayChain - Airbnb DApp
 
-Decentralized Airbnb using Solidity smart contracts.
+decentralized airbnb clone using solidity smart contracts
 
-**Team:** Sean Bombay, Edison Ho, Minh Nguyen
+team: Sean Bombay, Edison Ho, Minh Nguyen
 
-## What is needed
+## requirements
 
-- Node.js
+- node.js
 - npm
+- ganache cli
 
-## Setup
+## setup
 
+install dependencies:
 ```bash
 npm install
-
-cd frontend
-npm install
+cd frontend && npm install
 ```
 
-## Run the App
+## running the app
 
+1. start ganache (in a separate terminal):
+```bash
+ganache --deterministic --port 8545
+```
+
+2. deploy contracts:
+```bash
+truffle migrate --reset
+./copy-contracts.sh
+```
+
+3. start frontend:
 ```bash
 cd frontend
 npm run dev
 ```
 
-Open http://localhost:5173
+4. open http://localhost:5173
 
-## What It Does
+## how it works
 
-- Browse property listings
-- Book stays with ETH
-- Escrow holds payment until checkout
-- Leave reviews after staying
+- browse listings
+- book stays with eth
+- payment held in escrow until checkout
+- leave reviews after staying
+- switch between accounts using dropdown (user 0 is admin)
 
-## Smart Contracts
+## contracts
 
-- `Listings.sol` - property listings
-- `BookingEscrow.sol` - bookings and payments
-- `Reviews.sol` - verified reviews
+- Listings.sol - create/delete property listings
+- BookingEscrow.sol - handles bookings and payments
+- Reviews.sol - reviews after completed stays
 
-## Demo Mode
+## accounts
 
-App runs demo wallet
+uses ganache deterministic accounts. user 0 (first account) is the admin and can delete any listing. other users can only delete their own listings.
+
+you cant book your own listing.
+
 ---
-
-CSC196D Fall 2025
+csc196d fall 2025
