@@ -3,307 +3,300 @@ import { Dialog } from 'primereact/dialog';
 import { TabView, TabPanel } from 'primereact/tabview';
 import { InputText } from 'primereact/inputtext';
 import { InputNumber } from 'primereact/inputnumber';
+import { Dropdown } from 'primereact/dropdown';
 import { Button } from 'primereact/button';
 import { DataTable } from 'primereact/datatable';
 import { Column } from 'primereact/column';
 import { Message } from 'primereact/message';
-import { Tag } from 'primereact/tag';
 import { useListings, useBooking } from '../hooks/useContracts';
 import { useWeb3 } from '../context/Web3Context';
 
-/*
- * HostDashboard - full control panel for property hosts
- * Lets hosts create listings and manage bookings
-*/
 export function HostDashboard({ visible, onHide }) {
-  const { createListing, getMyListings, loading: listingsLoading } = useListings();
-  const { getHostBookings, checkOut, loading: bookingLoading } = useBooking();
-  const { account, fromWei } = useWeb3();
+  const { createListing, deleteListing, getAllListings, getMyListings, getAdmin, loading: listingsLoading } = useListings();
+  const { getMyBookings, getHostBookings, loading: bookingLoading } = useBooking();
+  const { account } = useWeb3();
 
-  // State for creating a new listing
   const [newListing, setNewListing] = useState({
     name: '',
     location: '',
-    pricePerNight: 0.1
+    pricePerNight: 0.1,
+    type: 'Apartment',
+    beds: 1
   });
 
-  // State for existing listings and bookings
+  const [allListings, setAllListings] = useState([]);
   const [myListings, setMyListings] = useState([]);
   const [myBookings, setMyBookings] = useState([]);
-
-  // UI state
+  const [incomingBookings, setIncomingBookings] = useState([]);
+  const [adminAddress, setAdminAddress] = useState(null);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
 
-  // Load host's listings and bookings when dashboard opens
+  const typeOptions = [
+    { label: 'Apartment', value: 'Apartment' },
+    { label: 'House', value: 'House' },
+    { label: 'Cabin', value: 'Cabin' },
+    { label: 'Villa', value: 'Villa' },
+    { label: 'Studio', value: 'Studio' }
+  ];
+
+  const isAdmin = account && adminAddress && account.toLowerCase() === adminAddress.toLowerCase();
+
   useEffect(() => {
     if (visible && account) {
-      loadDashboardData();
+      loadData();
     }
   }, [visible, account]);
 
-  // Fetch all host data
-  const loadDashboardData = async () => {
+  const loadData = async () => {
     try {
-      const [listings, bookings] = await Promise.all([
+      const [all, mine, bookings, hostBookings, admin] = await Promise.all([
+        getAllListings(),
         getMyListings(),
-        getHostBookings()
+        getMyBookings(),
+        getHostBookings(),
+        getAdmin()
       ]);
-
-      setMyListings(listings);
+      setAllListings(all);
+      setMyListings(mine);
       setMyBookings(bookings);
+      setIncomingBookings(hostBookings);
+      setAdminAddress(admin);
     } catch (err) {
-      console.error('Error loading dashboard data:', err);
+      console.log('Error loading data: ' + err.message);
     }
   };
 
-  // Handle creating a new listing
   const handleCreateListing = async () => {
     try {
       setError(null);
       setSuccess(null);
 
-      // Validation
-      if (!newListing.name || newListing.name.trim() === '') {
-        setError('Please enter a listing name');
+      if (!newListing.name.trim()) {
+        setError('Enter a listing name');
         return;
       }
-
-      if (!newListing.location || newListing.location.trim() === '') {
-        setError('Please enter a location');
+      if (!newListing.location.trim()) {
+        setError('Enter a location');
         return;
       }
-
       if (newListing.pricePerNight <= 0) {
         setError('Price must be greater than 0');
         return;
       }
 
-      // Create the listing on blockchain
       await createListing(
         newListing.name,
         newListing.location,
+        newListing.type,
+        newListing.beds,
         newListing.pricePerNight
       );
 
-      setSuccess('Listing created successfully! 🎉');
+      setSuccess('Listing created');
+      setNewListing({ name: '', location: '', pricePerNight: 0.1, type: 'Apartment', beds: 1 });
 
-      // Reset form
-      setNewListing({
-        name: '',
-        location: '',
-        pricePerNight: 0.1
-      });
-
-      // Reload listings
       setTimeout(() => {
-        loadDashboardData();
+        loadData();
         setSuccess(null);
-      }, 2000);
+      }, 1500);
 
     } catch (err) {
-      console.error('Error creating listing:', err);
+      console.log('Error creating listing: ' + err.message);
       setError(err.message || 'Failed to create listing');
     }
   };
 
-  // Handle checking out a guest (releases payment)
-  const handleCheckOut = async (bookingId) => {
+  const handleDeleteListing = async (listingId) => {
     try {
       setError(null);
-      await checkOut(bookingId);
-      setSuccess('Guest checked out successfully! Payment released.');
-
-      // Reload bookings
+      await deleteListing(listingId);
+      setSuccess('Listing deleted');
       setTimeout(() => {
-        loadDashboardData();
+        loadData();
         setSuccess(null);
-      }, 2000);
-
+      }, 1500);
     } catch (err) {
-      console.error('Error checking out:', err);
-      setError(err.message || 'Failed to check out guest');
+      console.log('Error deleting listing: ' + err.message);
+      setError(err.message || 'Failed to delete listing');
     }
   };
 
-  // Format booking status as colored tag
-  const statusBodyTemplate = (rowData) => {
-    const statusMap = {
-      0: { label: 'Pending', severity: 'warning' },
-      1: { label: 'Checked In', severity: 'info' },
-      2: { label: 'Completed', severity: 'success' },
-      3: { label: 'Cancelled', severity: 'danger' }
-    };
-
-    const status = statusMap[rowData.status] || { label: 'Unknown', severity: 'secondary' };
-
-    return <Tag value={status.label} severity={status.severity} />;
+  const canDelete = (listing) => {
+    if (!account) return false;
+    if (isAdmin) return true;
+    return listing.host.toLowerCase() === account.toLowerCase();
   };
 
-  // Format dates from timestamp
-  const dateBodyTemplate = (rowData, field) => {
-    const timestamp = field === 'checkIn' ? rowData.checkInDate : rowData.checkOutDate;
-    const date = new Date(parseInt(timestamp) * 1000); // Convert Unix timestamp to Date
-    return date.toLocaleDateString();
-  };
-
-  // Action buttons for bookings
-  const actionBodyTemplate = (rowData) => {
-    const canCheckOut = rowData.status === '0' || rowData.status === '1'; // Pending or CheckedIn
-    const isPastCheckout = Date.now() / 1000 >= parseInt(rowData.checkOutDate);
-
+  const actionTemplate = (rowData) => {
+    if (!canDelete(rowData)) return null;
     return (
       <Button
-        label="Check Out"
-        icon="pi pi-sign-out"
+        label="Delete"
         size="small"
-        onClick={() => handleCheckOut(rowData.id)}
-        disabled={!canCheckOut || !isPastCheckout}
-        tooltip={!isPastCheckout ? 'Checkout date not reached yet' : ''}
+        severity="danger"
+        onClick={() => handleDeleteListing(rowData.id)}
+        disabled={listingsLoading}
       />
     );
+  };
+
+  const formatStatus = (status) => {
+    const statusMap = { '0': 'Pending', '1': 'Checked In', '2': 'Completed', '3': 'Cancelled' };
+    return statusMap[status] || status;
+  };
+
+  const formatDate = (timestamp) => {
+    return new Date(parseInt(timestamp) * 1000).toLocaleDateString();
   };
 
   return (
     <Dialog
       visible={visible}
       onHide={onHide}
-      header="Host Dashboard"
-      style={{ width: '90vw', maxWidth: '1200px' }}
-      maximizable
-      dismissableMask
+      header="Dashboard"
+      style={{ width: '900px' }}
     >
-      {/* Success/Error messages */}
       {error && <Message severity="error" text={error} className="w-full mb-3" />}
       {success && <Message severity="success" text={success} className="w-full mb-3" />}
 
+      {isAdmin && (
+        <div className="mb-3 p-2 surface-100 border-round">
+          <strong>Admin Mode</strong> - You can delete any listing
+        </div>
+      )}
+
       <TabView>
-        {/* Tab 1: Create New Listing */}
-        <TabPanel header="Create Listing" leftIcon="pi pi-plus-circle mr-2">
-          <div className="flex flex-column gap-4 p-3">
+        <TabPanel header="Create Listing">
+          <div className="flex flex-column gap-3 p-3">
             <div>
-              <label className="block text-600 text-sm mb-2">Listing Name *</label>
+              <label className="block text-sm mb-1">Name</label>
               <InputText
                 value={newListing.name}
                 onChange={(e) => setNewListing({ ...newListing, name: e.target.value })}
-                placeholder="e.g., Cozy Beach House"
+                placeholder="Listing name"
                 className="w-full"
               />
             </div>
 
             <div>
-              <label className="block text-600 text-sm mb-2">Location *</label>
+              <label className="block text-sm mb-1">Location</label>
               <InputText
                 value={newListing.location}
                 onChange={(e) => setNewListing({ ...newListing, location: e.target.value })}
-                placeholder="e.g., Miami Beach, FL"
+                placeholder="City, State"
                 className="w-full"
               />
             </div>
 
             <div>
-              <label className="block text-600 text-sm mb-2">Price per Night (ETH) *</label>
+              <label className="block text-sm mb-1">Type</label>
+              <Dropdown
+                value={newListing.type}
+                onChange={(e) => setNewListing({ ...newListing, type: e.value })}
+                options={typeOptions}
+                className="w-full"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm mb-1">Beds</label>
+              <InputNumber
+                value={newListing.beds}
+                onValueChange={(e) => setNewListing({ ...newListing, beds: e.value })}
+                min={1}
+                max={20}
+                className="w-full"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm mb-1">Price per Night (ETH)</label>
               <InputNumber
                 value={newListing.pricePerNight}
                 onValueChange={(e) => setNewListing({ ...newListing, pricePerNight: e.value })}
                 minFractionDigits={2}
                 maxFractionDigits={4}
                 min={0.001}
-                step={0.01}
                 className="w-full"
-                placeholder="0.1"
               />
             </div>
 
-            <div className="flex gap-2">
-              <Button
-                label="Create Listing"
-                icon="pi pi-check"
-                onClick={handleCreateListing}
-                loading={listingsLoading}
-              />
-              <Button
-                label="Clear"
-                icon="pi pi-times"
-                severity="secondary"
-                onClick={() => setNewListing({ name: '', location: '', pricePerNight: 0.1 })}
-              />
-            </div>
-
-            <div className="text-xs text-500">
-              <i className="pi pi-info-circle mr-1" />
-              You'll need to confirm the transaction in MetaMask
-            </div>
+            <Button
+              label="Create Listing"
+              onClick={handleCreateListing}
+              loading={listingsLoading}
+            />
           </div>
         </TabPanel>
 
-        {/* Tab 2: My Listings */}
-        <TabPanel header="My Listings" leftIcon="pi pi-home mr-2">
+        <TabPanel header="My Listings">
           <div className="p-3">
             {myListings.length === 0 ? (
-              <div className="text-center p-5 text-600">
-                <i className="pi pi-inbox text-4xl mb-3" />
-                <p>You haven't created any listings yet.</p>
-              </div>
+              <div className="text-center p-4" style={{ color: '#666' }}>No listings yet</div>
             ) : (
-              <DataTable value={myListings} paginator rows={5} responsiveLayout="scroll">
-                <Column field="id" header="ID" style={{ width: '80px' }} />
+              <DataTable value={myListings.filter(l => l.isActive)} size="small">
+                <Column field="id" header="ID" />
                 <Column field="name" header="Name" />
                 <Column field="location" header="Location" />
-                <Column
-                  field="pricePerNight"
-                  header="Price/Night"
-                  body={(rowData) => `${rowData.pricePerNight} ETH`}
-                />
-                <Column
-                  field="isActive"
-                  header="Status"
-                  body={(rowData) => (
-                    <Tag
-                      value={rowData.isActive ? 'Active' : 'Inactive'}
-                      severity={rowData.isActive ? 'success' : 'danger'}
-                    />
-                  )}
-                />
+                <Column field="propertyType" header="Type" />
+                <Column field="beds" header="Beds" />
+                <Column field="pricePerNight" header="Price" body={(row) => row.pricePerNight + ' ETH'} />
+                <Column header="Actions" body={actionTemplate} />
               </DataTable>
             )}
           </div>
         </TabPanel>
 
-        {/* Tab 3: Bookings */}
-        <TabPanel header="Bookings" leftIcon="pi pi-calendar mr-2">
+        {isAdmin && (
+          <TabPanel header="All Listings (Admin)">
+            <div className="p-3">
+              {allListings.length === 0 ? (
+                <div className="text-center p-4" style={{ color: '#666' }}>No listings</div>
+              ) : (
+                <DataTable value={allListings} size="small">
+                  <Column field="id" header="ID" />
+                  <Column field="name" header="Name" />
+                  <Column field="location" header="Location" />
+                  <Column field="host" header="Host" body={(row) => row.host.substring(0, 10) + '...'} />
+                  <Column field="pricePerNight" header="Price" body={(row) => row.pricePerNight + ' ETH'} />
+                  <Column header="Actions" body={actionTemplate} />
+                </DataTable>
+              )}
+            </div>
+          </TabPanel>
+        )}
+
+        <TabPanel header="My Bookings">
           <div className="p-3">
             {myBookings.length === 0 ? (
-              <div className="text-center p-5 text-600">
-                <i className="pi pi-calendar-times text-4xl mb-3" />
-                <p>No bookings yet.</p>
-              </div>
+              <div className="text-center p-4" style={{ color: '#666' }}>No bookings yet</div>
             ) : (
-              <DataTable value={myBookings} paginator rows={5} responsiveLayout="scroll">
-                <Column field="id" header="Booking ID" style={{ width: '100px' }} />
-                <Column field="listingId" header="Listing ID" style={{ width: '100px' }} />
-                <Column
-                  field="guest"
-                  header="Guest"
-                  body={(rowData) => `${rowData.guest.substring(0, 10)}...`}
-                />
-                <Column
-                  field="checkInDate"
-                  header="Check-in"
-                  body={(rowData) => dateBodyTemplate(rowData, 'checkIn')}
-                />
-                <Column
-                  field="checkOutDate"
-                  header="Check-out"
-                  body={(rowData) => dateBodyTemplate(rowData, 'checkOut')}
-                />
-                <Column
-                  field="totalPrice"
-                  header="Total"
-                  body={(rowData) => `${rowData.totalPrice} ETH`}
-                />
-                <Column field="status" header="Status" body={statusBodyTemplate} />
-                <Column header="Actions" body={actionBodyTemplate} />
+              <DataTable value={myBookings} size="small">
+                <Column field="id" header="ID" />
+                <Column field="listingId" header="Listing" />
+                <Column field="checkInDate" header="Check-in" body={(row) => formatDate(row.checkInDate)} />
+                <Column field="checkOutDate" header="Check-out" body={(row) => formatDate(row.checkOutDate)} />
+                <Column field="totalPrice" header="Total" body={(row) => row.totalPrice + ' ETH'} />
+                <Column field="status" header="Status" body={(row) => formatStatus(row.status)} />
+              </DataTable>
+            )}
+          </div>
+        </TabPanel>
+
+        <TabPanel header="Incoming Bookings">
+          <div className="p-3">
+            {incomingBookings.length === 0 ? (
+              <div className="text-center p-4" style={{ color: '#666' }}>No incoming bookings</div>
+            ) : (
+              <DataTable value={incomingBookings} size="small">
+                <Column field="id" header="ID" />
+                <Column field="listingId" header="Listing" />
+                <Column field="guest" header="Guest" body={(row) => row.guest.substring(0, 10) + '...'} />
+                <Column field="checkInDate" header="Check-in" body={(row) => formatDate(row.checkInDate)} />
+                <Column field="checkOutDate" header="Check-out" body={(row) => formatDate(row.checkOutDate)} />
+                <Column field="totalPrice" header="Total" body={(row) => row.totalPrice + ' ETH'} />
+                <Column field="status" header="Status" body={(row) => formatStatus(row.status)} />
               </DataTable>
             )}
           </div>

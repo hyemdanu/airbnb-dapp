@@ -3,53 +3,34 @@ pragma solidity ^0.8.19;
 
 import "./BookingEscrow.sol";
 
-/*
- * Reviews and Ratings Contract
- * Guests can leave reviews after completing a stay
- * This helps build trust and lets future guests know what to expect
- * Only verified guests (who actually stayed) can leave reviews - prevents fake reviews
-*/
+// handles reviews after completed stays
 contract Reviews {
 
-    // Reference to BookingEscrow so we can verify someone actually stayed there
+    // need this to verify bookings
     BookingEscrow public bookingContract;
 
-    // Counter for review IDs
     uint256 public reviewCounter = 0;
 
-    // Review structure - all the info about one review
+    // review info
     struct Review {
-        uint256 id;              // unique review ID
-        uint256 bookingId;       // which booking this review is for
-        uint256 listingId;       // which property was reviewed
-        address reviewer;        // who wrote the review (the guest)
-        address host;            // who owns the property
-        uint256 rating;          // 1-5 stars
-        string comment;          // written review text
-        uint256 createdAt;       // when the review was posted
-        bool isActive;           // can be deactivated if inappropriate
+        uint256 id;
+        uint256 bookingId;
+        uint256 listingId;
+        address reviewer;
+        address host;
+        uint256 rating;
+        string comment;
+        uint256 createdAt;
+        bool isActive;
     }
 
-    /*
-     * Storage mappings to organize reviews
-    */
-    mapping(uint256 => Review) public reviews; // reviewId -> Review
-
-    // All reviews for a specific listing
-    // Example: if you're looking at a property, show all its reviews
+    // storage
+    mapping(uint256 => Review) public reviews;
     mapping(uint256 => uint256[]) public listingReviews;
-
-    // All reviews written by a specific user
-    // Example: your review history
     mapping(address => uint256[]) public reviewerReviews;
-
-    // Track if a booking already has a review (one review per booking)
-    // Prevents someone from leaving multiple reviews for the same stay
     mapping(uint256 => bool) public bookingHasReview;
 
-    /*
-     * Events for the frontend to listen to
-    */
+    // events for frontend
     event ReviewCreated(
         uint256 indexed reviewId,
         uint256 indexed listingId,
@@ -57,75 +38,49 @@ contract Reviews {
         address reviewer,
         uint256 rating
     );
-
     event ReviewUpdated(uint256 indexed reviewId, uint256 newRating, string newComment);
     event ReviewDeactivated(uint256 indexed reviewId);
 
-    /*
-     * Modifiers for security checks
-    */
+    // make sure review exists
     modifier reviewExists(uint256 _reviewId) {
         require(_reviewId > 0 && _reviewId <= reviewCounter, "Review doesn't exist");
         _;
     }
 
+    // only the person who wrote it
     modifier onlyReviewer(uint256 _reviewId) {
-        require(reviews[_reviewId].reviewer == msg.sender, "You didn't write this review");
+        require(reviews[_reviewId].reviewer == msg.sender, "Not your review");
         _;
     }
 
-    /*
-     * Constructor - need to know where the BookingEscrow contract is
-     * so we can verify bookings are real
-    */
     constructor(address _bookingContractAddress) {
         bookingContract = BookingEscrow(_bookingContractAddress);
     }
 
-    /*
-     * Create a new review
-     * Only guests who completed a stay can leave a review
-     *
-     * Process:
-     * 1. Verify the booking exists and is completed
-     * 2. Make sure the person leaving review is the guest from that booking
-     * 3. Check they haven't already reviewed this booking
-     * 4. Validate rating (must be 1-5 stars)
-     * 5. Create and store the review
-    */
+    // leave a review after staying
     function createReview(
         uint256 _bookingId,
         uint256 _rating,
         string memory _comment
     ) public returns (uint256) {
-        // Get booking details from the BookingEscrow contract
+        // get booking info to verify
         (
-            ,                    // id
+            ,
             uint256 listingId,
             address guest,
             address host,
-            ,                    // checkInDate
-            ,                    // checkOutDate
-            ,                    // totalPrice
+            ,
+            ,
+            ,
             BookingEscrow.BookingStatus status
         ) = bookingContract.getBooking(_bookingId);
 
-        // Make sure booking is completed (can't review if you haven't stayed yet)
-        require(status == BookingEscrow.BookingStatus.Completed, "Can only review completed bookings");
+        require(status == BookingEscrow.BookingStatus.Completed, "Booking must be completed");
+        require(guest == msg.sender, "You weren't the guest");
+        require(!bookingHasReview[_bookingId], "Already reviewed");
+        require(_rating >= 1 && _rating <= 5, "Rating must be 1-5");
+        require(bytes(_comment).length > 0, "Need a comment");
 
-        // Make sure the person leaving review is actually the guest who stayed there
-        require(guest == msg.sender, "You weren't the guest for this booking");
-
-        // Prevent duplicate reviews (one review per booking)
-        require(!bookingHasReview[_bookingId], "You already reviewed this booking");
-
-        // Rating must be 1-5 stars (standard rating system)
-        require(_rating >= 1 && _rating <= 5, "Rating must be between 1 and 5 stars");
-
-        // Comment should have some content (optional but encouraged)
-        require(bytes(_comment).length > 0, "Please write a comment");
-
-        // Create the review
         reviewCounter++;
 
         reviews[reviewCounter] = Review({
@@ -140,24 +95,16 @@ contract Reviews {
             isActive: true
         });
 
-        // Add to tracking lists
         listingReviews[listingId].push(reviewCounter);
         reviewerReviews[msg.sender].push(reviewCounter);
-
-        // Mark this booking as reviewed
         bookingHasReview[_bookingId] = true;
 
-        // Notify frontend
         emit ReviewCreated(reviewCounter, listingId, _bookingId, msg.sender, _rating);
 
         return reviewCounter;
     }
 
-    /*
-     * Update an existing review
-     * Only the person who wrote it can edit it
-     * Can't edit if review has been deactivated
-    */
+    // edit your review
     function updateReview(
         uint256 _reviewId,
         uint256 _newRating,
@@ -165,62 +112,45 @@ contract Reviews {
     ) public reviewExists(_reviewId) onlyReviewer(_reviewId) {
         Review storage review = reviews[_reviewId];
 
-        require(review.isActive, "Can't update a deactivated review");
-        require(_newRating >= 1 && _newRating <= 5, "Rating must be 1-5 stars");
-        require(bytes(_newComment).length > 0, "Comment can't be empty");
+        require(review.isActive, "Review is deactivated");
+        require(_newRating >= 1 && _newRating <= 5, "Rating must be 1-5");
+        require(bytes(_newComment).length > 0, "Need a comment");
 
-        // Update the review
         review.rating = _newRating;
         review.comment = _newComment;
 
         emit ReviewUpdated(_reviewId, _newRating, _newComment);
     }
 
-    /*
-     * Deactivate a review (soft delete)
-     * Either the reviewer or host can request this
-     * Useful for removing inappropriate content
-     * Doesn't delete from blockchain (blockchain data is permanent) but marks as inactive
-    */
+    // hide a review (reviewer or host can do this)
     function deactivateReview(uint256 _reviewId)
         public
         reviewExists(_reviewId)
     {
         Review storage review = reviews[_reviewId];
 
-        // Only the reviewer or the host can deactivate
         require(
             msg.sender == review.reviewer || msg.sender == review.host,
             "Only reviewer or host can deactivate"
         );
-
-        require(review.isActive, "Review is already deactivated");
+        require(review.isActive, "Already deactivated");
 
         review.isActive = false;
 
         emit ReviewDeactivated(_reviewId);
     }
 
-    /*
-     * Get all reviews for a specific listing
-     * Used to show reviews on a property page
-    */
+    // get reviews for a listing
     function getListingReviews(uint256 _listingId) public view returns (uint256[] memory) {
         return listingReviews[_listingId];
     }
 
-    /*
-     * Get all reviews written by a specific user
-     * Shows your review history
-    */
+    // get reviews by a person
     function getReviewerReviews(address _reviewer) public view returns (uint256[] memory) {
         return reviewerReviews[_reviewer];
     }
 
-    /*
-     * Get details of a specific review
-     * View function - doesn't cost gas
-    */
+    // get review details
     function getReview(uint256 _reviewId)
         public
         view
@@ -247,22 +177,17 @@ contract Reviews {
         );
     }
 
-    /*
-     * Calculate average rating for a listing
-     * Goes through all active reviews and calculates the mean
-     * Returns rating * 100 (so 4.75 stars = 475) to avoid decimals in Solidity
-    */
+    // get average rating for a listing (returns rating * 100 for precision)
     function getListingAverageRating(uint256 _listingId) public view returns (uint256) {
         uint256[] memory reviewIds = listingReviews[_listingId];
 
         if (reviewIds.length == 0) {
-            return 0; // no reviews yet
+            return 0;
         }
 
         uint256 totalRating = 0;
         uint256 activeCount = 0;
 
-        // Sum up all active reviews
         for (uint256 i = 0; i < reviewIds.length; i++) {
             Review memory review = reviews[reviewIds[i]];
             if (review.isActive) {
@@ -272,19 +197,13 @@ contract Reviews {
         }
 
         if (activeCount == 0) {
-            return 0; // no active reviews
+            return 0;
         }
 
-        // Calculate average and multiply by 100 to handle decimals
-        // Example: total = 19, count = 4, avg = 4.75
-        // We return 475 (which frontend can display as 4.75)
         return (totalRating * 100) / activeCount;
     }
 
-    /*
-     * Get total number of active reviews for a listing
-     * Useful for showing "Based on 42 reviews"
-    */
+    // count active reviews for a listing
     function getListingReviewCount(uint256 _listingId) public view returns (uint256) {
         uint256[] memory reviewIds = listingReviews[_listingId];
         uint256 activeCount = 0;
@@ -298,10 +217,7 @@ contract Reviews {
         return activeCount;
     }
 
-    /*
-     * Check if a booking has already been reviewed
-     * Prevents duplicate reviews
-    */
+    // check if booking has been reviewed
     function hasBeenReviewed(uint256 _bookingId) public view returns (bool) {
         return bookingHasReview[_bookingId];
     }
